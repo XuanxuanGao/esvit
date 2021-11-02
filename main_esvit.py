@@ -1,3 +1,4 @@
+# coding=utf-8
 # Modified by Chunyuan Li (chunyl@microsoft.com)
 #
 # Copyright (c) Facebook, Inc. and its affiliates.
@@ -344,12 +345,12 @@ def train_esvit(args):
         else:
             head_dense_student, head_dense_teacher = None, None
             
-        student = utils.MultiCropWrapper(student, DINOHead(
-            embed_dim,
-            args.out_dim,
-            use_bn=args.use_bn_in_head,
-            norm_last_layer=args.norm_last_layer,
-        ), head_dense=head_dense_student, use_dense_prediction=use_dense_prediction)
+        student = utils.MultiCropWrapper(
+            student, 
+            DINOHead(embed_dim, args.out_dim, use_bn=args.use_bn_in_head, norm_last_layer=args.norm_last_layer), 
+            head_dense=head_dense_student, 
+            use_dense_prediction=use_dense_prediction
+        )
         teacher = utils.MultiCropWrapper(
             teacher,
             DINOHead(embed_dim, args.out_dim, args.use_bn_in_head),
@@ -419,6 +420,7 @@ def train_esvit(args):
         fp16_scaler = torch.cuda.amp.GradScaler()
 
     # ============ init schedulers ... ============
+    # 返回total iteration个值，每个iteration取当前的值
     lr_schedule = utils.cosine_scheduler(
         args.lr * (args.batch_size_per_gpu * utils.get_world_size()) / 256.,  # linear scaling rule
         args.min_lr,
@@ -504,13 +506,18 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
     for it, (images, _) in enumerate(metric_logger.log_every(data_loader, 10, header)):
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
-        for i, param_group in enumerate(optimizer.param_groups):
-            param_group["lr"] = lr_schedule[it]
+        # len(data_loader)是一个epoch里有多少个batch的数据，也即一个epoch里有多少次迭代；epoch是当前的轮数；it是当前轮的迭代数
+        
+        for i, param_group in enumerate(optimizer.param_groups): 
+            # optimizer.param_groups是一个两个元素的list，第一个元素是regularized params，第二个元素是non-regularized params
+            param_group["lr"] = lr_schedule[it] # 两个元素都要进行lr更新
             if i == 0:  # only the first group is regularized
-                param_group["weight_decay"] = wd_schedule[it]
+                param_group["weight_decay"] = wd_schedule[it] # 只有第一个元素更新weight_decay，第二个元素的weight_decay始终是0
 
         # move images to gpu
-        images = [im.cuda(non_blocking=True) for im in images]
+        images = [im.cuda(non_blocking=True) for im in images] # 2个global+8个local images
+        # 如果pin_memory=True的话，生成的Tensor数据存放在锁页内存中，这样内存中的Tensor转义到GPU的显存会更快；
+        # 此时将数据放入GPU的时候，也应该把non_blocking打开，这样就只把数据放入GPU而不取出，访问时间会大大减少。
 
         # mixup for teacher model output
         teacher_input = images[:2]
@@ -540,7 +547,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(fp16_scaler is not None):
             teacher_output = teacher(teacher_input)  # only the 2 global views pass through the teacher
-            student_output = student(student_input)
+            student_output = student(student_input)  # all the 2 global views + 8 local views pass through the student
             loss = dino_loss(student_output, teacher_output, epoch, targets_mixup)
 
         if not math.isfinite(loss.item()):
@@ -568,7 +575,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
             loss.backward()
             torch.cuda.synchronize()
             if args.clip_grad:
-                param_norms = utils.clip_gradients(model, args.clip_grad)
+                param_norms = utils.clip_gradients(student, args.clip_grad)
             utils.cancel_gradients_last_layer(epoch, student,
                                               args.freeze_last_layer)
             optimizer.step()
@@ -622,7 +629,7 @@ class DINOLoss(nn.Module):
         Cross-entropy between softmax outputs of the teacher and student networks.
         """
         student_out = student_output / self.student_temp
-        student_out = student_out.chunk(self.ncrops)
+        student_out = student_out.chunk(self.ncrops) # 默认dim=0，沿batch维分块，每一个crop都是out_dim的向量
 
         # teacher centering and sharpening
         temp = self.teacher_temp_schedule[epoch]

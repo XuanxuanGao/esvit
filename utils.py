@@ -1,3 +1,4 @@
+# coding=utf-8
 
 # Modified by Chunyuan Li (chunyl@microsoft.com)
 #
@@ -351,7 +352,7 @@ class MetricLogger(object):
         MB = 1024.0 * 1024.0
         for obj in iterable:
             data_time.update(time.time() - end)
-            yield obj
+            yield obj # yield就是 return 返回一个值，并且记住这个返回的位置，下次迭代就从这个位置往后开始执行。
             iter_time.update(time.time() - end)
             if i % print_freq == 0 or i == len(iterable) - 1:
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
@@ -582,6 +583,9 @@ class MultiCropWrapper(nn.Module):
             torch.tensor([inp.shape[-1] for inp in x]),
             return_counts=True,
         )[1], 0)
+        # torch.unique_consecutive([,,,], return_counts=True)，返回output和counts，其中output是每连续元素的第一个值，counts是output当前元素的连续个数
+        # torch.cumsum([,,,], dim=0)，第一列不变，后面的列依次在上一列基础上加上自身的数
+        # idx_crops是到第i张图片为止，加上前面是同样shape的图片，有几个
 
 
         if self.use_dense_prediction:
@@ -607,7 +611,7 @@ class MultiCropWrapper(nn.Module):
 
             start_idx = 0
             for end_idx in idx_crops:
-                _out = self.backbone(torch.cat(x[start_idx: end_idx]))
+                _out = self.backbone(torch.cat(x[start_idx: end_idx])) #torch.cat默认dim=0，相当于batch维上拼接
                 if start_idx == 0:
                     output = _out
                 else:
@@ -680,7 +684,9 @@ def get_params_groups(model):
             not_regularized.append(param)
         else:
             regularized.append(param)
-    return [{'params': regularized}, {'params': not_regularized, 'weight_decay': 0.}]
+    return [{'params': regularized}, {'params': not_regularized, 'weight_decay': 0.}] 
+    # regularized会应用外层optimizer设置的所有参数；
+    # not_regularized除了'weight_decay'是0外，也会应用外层optimizer设置的所有参数
 
 
 def has_batchnorms(model):

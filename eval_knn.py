@@ -1,3 +1,4 @@
+# coding=utf-8
 
 # Modified by Chunyuan Li (chunyl@microsoft.com)
 #
@@ -132,41 +133,41 @@ def extract_feature_pipeline(args):
         train_features = nn.functional.normalize(train_features, dim=1, p=2)
         test_features = nn.functional.normalize(test_features, dim=1, p=2)
 
-    train_labels = torch.tensor([s[-1] for s in dataset_train.samples]).long()
-    test_labels = torch.tensor([s[-1] for s in dataset_val.samples]).long()
+    train_labels = torch.tensor([s[-1] for s in dataset_train.samples]).long() # samples是DatasetFolder的属性，List of (sample path, class_index) tuples
+    test_labels = torch.tensor([s[-1] for s in dataset_val.samples]).long() # torch定义了7种CPU类型、8种GPU类型的tensor，见torch.Tensor，tensor转为某CPU类型直接.long()，转为某GPU类型直接.cuda().long()
     # save features and labels
     if args.dump_features and dist.get_rank() == 0:
         if not os.path.exists(args.dump_features):
             os.makedirs(args.dump_features)
-        torch.save(train_features.cpu(), os.path.join(args.dump_features, "trainfeat.pth"))
+        torch.save(train_features.cpu(), os.path.join(args.dump_features, "trainfeat.pth")) # torch.save不光可以保存模型，也可以保存tensor，其实就是采用pickle将保存对象序列化了
         torch.save(test_features.cpu(), os.path.join(args.dump_features, "testfeat.pth"))
         torch.save(train_labels.cpu(), os.path.join(args.dump_features, "trainlabels.pth"))
         torch.save(test_labels.cpu(), os.path.join(args.dump_features, "testlabels.pth"))
     return train_features, test_features, train_labels, test_labels
 
 
-@torch.no_grad()
+@torch.no_grad() #不需要计算梯度（更快），也不会进行反向传播
 def extract_features(model, data_loader):
     metric_logger = utils.MetricLogger(delimiter="  ")
     features = None
-    for samples, index in metric_logger.log_every(data_loader, 10):
+    for samples, index in metric_logger.log_every(data_loader, 10): # samples, index是data_loader的元素，是img和它对应的索引idx，由metric_logger.log_every yield出的
         samples = samples.cuda(non_blocking=True)
         index = index.cuda(non_blocking=True)
         feats = model(samples).clone()
 
         # init storage feature matrix
         if dist.get_rank() == 0 and features is None:
-            features = torch.zeros(len(data_loader.dataset), feats.shape[-1])
+            features = torch.zeros(len(data_loader.dataset), feats.shape[-1]) # DataLoader有dataset属性，len(dataset)是dataset的样本数。对比之下，len(dataloader)是一个epoch里的batch个数，也即一轮的迭代次数
             if args.use_cuda:
                 features = features.cuda(non_blocking=True)
             print(f"Storing features into tensor of shape {features.shape}")
 
         # get indexes from all processes
-        y_all = torch.empty(dist.get_world_size(), index.size(0), dtype=index.dtype, device=index.device)
-        y_l = list(y_all.unbind(0))
-        y_all_reduce = torch.distributed.all_gather(y_l, index, async_op=True)
-        y_all_reduce.wait()
-        index_all = torch.cat(y_l)
+        y_all = torch.empty(dist.get_world_size(), index.size(0), dtype=index.dtype, device=index.device) #torch.empty()返回填充有未初始化数据的张量，这里的shape=(1, batch)
+        y_l = list(y_all.unbind(0)) #ubind移除指定维后，返回一个元组，包含了沿着指定维切片后的各个切片。也即，变成了[device1的batch idx tuple, device2的batch idx tuple, ...]
+        y_all_reduce = torch.distributed.all_gather(y_l, index, async_op=True) # 把各个device里的tensor index集中到各个device都有的tensor list y_l中
+        y_all_reduce.wait() # 对进程上锁，等待通信结束。在.wait() 执行之后，我们可以保证通信已经结束，所有index已经集中到y_l里了。
+        index_all = torch.cat(y_l) # 得到所有index
 
         # share features between processes
         feats_all = torch.empty(
@@ -176,14 +177,14 @@ def extract_features(model, data_loader):
             dtype=feats.dtype,
             device=feats.device,
         )
-        output_l = list(feats_all.unbind(0))
-        output_all_reduce = torch.distributed.all_gather(output_l, feats, async_op=True)
+        output_l = list(feats_all.unbind(0)) 
+        output_all_reduce = torch.distributed.all_gather(output_l, feats, async_op=True) #将各个device里的feats，集中到每个device都有的output_l这个list
         output_all_reduce.wait()
 
         # update storage feature matrix
         if dist.get_rank() == 0:
             if args.use_cuda:
-                features.index_copy_(0, index_all, torch.cat(output_l))
+                features.index_copy_(0, index_all, torch.cat(output_l)) # 在第0维，将torch.cat(output_l)[i]放在features的第index_all[i]位置上
             else:
                 features.index_copy_(0, index_all.cpu(), torch.cat(output_l).cpu())
     return features
@@ -192,7 +193,7 @@ def extract_features(model, data_loader):
 @torch.no_grad()
 def knn_classifier(train_features, train_labels, test_features, test_labels, k, T, num_classes=1000):
     top1, top5, total = 0.0, 0.0, 0
-    train_features = train_features.t()
+    train_features = train_features.t() # (num_feat, batch)
     num_test_images, num_chunks = test_labels.shape[0], 100
     imgs_per_chunk = num_test_images // num_chunks
     retrieval_one_hot = torch.zeros(k, num_classes).cuda()
@@ -200,32 +201,32 @@ def knn_classifier(train_features, train_labels, test_features, test_labels, k, 
         # get the features for test images
         features = test_features[
             idx : min((idx + imgs_per_chunk), num_test_images), :
-        ]
+        ] # (batch, num_feat)
         targets = test_labels[idx : min((idx + imgs_per_chunk), num_test_images)]
         batch_size = targets.shape[0]
 
         # calculate the dot product and compute top-k neighbors
-        similarity = torch.mm(features, train_features)
-        distances, indices = similarity.topk(k, largest=True, sorted=True)
-        candidates = train_labels.view(1, -1).expand(batch_size, -1)
-        retrieved_neighbors = torch.gather(candidates, 1, indices)
+        similarity = torch.mm(features, train_features) # (batch, batch) test feat到train feat的相似度。torch.mm是矩阵a和b矩阵相乘，比如a的维度是(1, 2)，b的维度是(2, 3)，返回的就是(1, 3)的矩阵
+        distances, indices = similarity.topk(k, largest=True, sorted=True) # test feat到相似度最高的k个train feat的相似度、train_idx，(batch, k), (batch, k)
+        candidates = train_labels.view(1, -1).expand(batch_size, -1) # train_labels (N, ) -> view (1, N) -> expand (batch, N)。expand的-1表示那维不变。
+        retrieved_neighbors = torch.gather(candidates, 1, indices) # topk的train label, (batch, k)
 
-        retrieval_one_hot.resize_(batch_size * k, num_classes).zero_()
-        retrieval_one_hot.scatter_(1, retrieved_neighbors.view(-1, 1), 1)
-        distances_transform = distances.clone().div_(T).exp_()
+        retrieval_one_hot.resize_(batch_size * k, num_classes).zero_() # topk train label的one-hot，(batch * k, num_classes)
+        retrieval_one_hot.scatter_(1, retrieved_neighbors.view(-1, 1), 1) # 把retrieved_neighbors.view(-1, 1) (batch*k, 1)当成index，在retrieval_one_hot的dim=1上，去放置value=1
+        distances_transform = distances.clone().div_(T).exp_() # exp(相似度/temperature), (batch, k)
         probs = torch.sum(
-            torch.mul(
-                retrieval_one_hot.view(batch_size, -1, num_classes),
-                distances_transform.view(batch_size, -1, 1),
+            torch.mul( #矩阵a和b对应位相乘，a和b的维度必须相等，比如a的维度是(1, 2)，b的维度是(1, 2)，返回的仍是(1, 2)的矩阵
+                retrieval_one_hot.view(batch_size, -1, num_classes), # (batch, k, num_classes)
+                distances_transform.view(batch_size, -1, 1), # (batch, k, 1)
             ),
             1,
-        )
-        _, predictions = probs.sort(1, True)
+        ) #（batch, num_classes)
+        _, predictions = probs.sort(1, True) # return (sorted_tensor, sorted_indices), (batch, num_classes)
 
         # find the predictions that match the target
-        correct = predictions.eq(targets.data.view(-1, 1))
-        top1 = top1 + correct.narrow(1, 0, 1).sum().item()
-        top5 = top5 + correct.narrow(1, 0, 5).sum().item()
+        correct = predictions.eq(targets.data.view(-1, 1)) # tensor.data相当于tensor.detach(), .eq之后(batch, num_classes)，其中num_classes里与targets一致的是1其他是0
+        top1 = top1 + correct.narrow(1, 0, 1).sum().item() # narrow相当于切片，在dim=1维上，[0:1）的范围，(batch, 1) -> sum (1,) 如果sum不设置dim，就是整个全部求和
+        top5 = top5 + correct.narrow(1, 0, 5).sum().item() # narrow相当于切片，在dim=1维上，[0:5）的范围，(batch, 5) -> sum (1,) 5个数里只有一个可能是1，也可能全0
         total += targets.size(0)
     top1 = top1 * 100.0 / total
     top5 = top5 * 100.0 / total
@@ -235,7 +236,7 @@ def knn_classifier(train_features, train_labels, test_features, test_labels, k, 
 class ReturnIndexDataset(datasets.ImageFolder):
     def __getitem__(self, idx):
         img, lab = super(ReturnIndexDataset, self).__getitem__(idx)
-        return img, idx
+        return img, idx # 将返回值从img,label变成了img,idx；label信息从dataset.samples里去捞了
 
 
 if __name__ == '__main__':
@@ -316,4 +317,4 @@ if __name__ == '__main__':
         if utils.is_main_process():
             with (Path(args.dump_features) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
-    dist.barrier()
+    dist.barrier() #同步所有的进程, 直到整组(也就是所有节点的所有GPU)到达这个函数的时候, 才会执行后面的代码

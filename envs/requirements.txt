@@ -3,7 +3,7 @@ pyyaml
 json_tricks
 tensorboardX==2.0
 yacs
-pycocotools
+# pycocotools
 scikit-learn
 tensorwatch
 pandas

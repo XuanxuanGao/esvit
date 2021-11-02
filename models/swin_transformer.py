@@ -1,3 +1,5 @@
+# coding=utf-8
+
 # --------------------------------------------------------
 # Modified by Chunyuan Li (chunyl@microsoft.com)
 # Swin Transformer
@@ -757,7 +759,7 @@ class SwinTransformer(nn.Module):
                 if start_idx == 0:
                     output = _out
                 else:
-                    output = torch.cat((output, _out))
+                    output = torch.cat((output, _out)) # batch维的拼接
                 start_idx = end_idx
             # Run the head forward on the concatenated features.
             return self.head(output)
@@ -942,7 +944,7 @@ class SwinTransformer(nn.Module):
                 )
         return self
 
-
+# 遇到@修饰符会直接运行register_model这个函数（无需其他的显式调用），函数的输入参数是get_cls_model这个函数
 @register_model
 def get_cls_model(config, is_teacher=False, use_dense_prediction=False, **kwargs):
     swin_spec = config.MODEL.SPEC

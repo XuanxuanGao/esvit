@@ -1,3 +1,6 @@
 plot/figs
 models/__pycache__/
 layers/bpe_simple_vocab_16e6.txt.gz
+exp_output/
+envs/whl/
+data/

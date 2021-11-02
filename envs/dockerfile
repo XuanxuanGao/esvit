@@ -1,0 +1,9 @@
+FROM geminihub.oa.com:80/yard/g-tlinux2.2-python3.6-cuda10.1-cudnn7.6:latest
+COPY ./requirements.txt /tmp/
+COPY ./whl /tmp
+RUN pip3 install --upgrade pip
+RUN pip3 install --find-links=/tmp/ torch==1.8.1+cu101
+RUN pip3 install --find-links=/tmp/ torchvision==0.9.1+cu101
+RUN pip3 install -r /tmp/requirements.txt
+RUN rm -rf /tmp/*
+CMD ["/bin/bash"]
