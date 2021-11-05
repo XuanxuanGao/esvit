@@ -5,5 +5,6 @@ RUN pip3 install --upgrade pip
 RUN pip3 install --find-links=/tmp/ torch==1.8.1+cu101
 RUN pip3 install --find-links=/tmp/ torchvision==0.9.1+cu101
 RUN pip3 install -r /tmp/requirements.txt
+RUN pip3 --default-time=1000 install -i https://pypi.tuna.tsinghua.edu.cn/simple faiss-gpu
 RUN rm -rf /tmp/*
 CMD ["/bin/bash"]
